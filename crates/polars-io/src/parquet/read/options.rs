@@ -9,6 +9,7 @@ pub struct ParquetOptions {
     pub parallel: ParallelStrategy,
     pub low_memory: bool,
     pub use_statistics: bool,
+    pub use_sma: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Hash)]

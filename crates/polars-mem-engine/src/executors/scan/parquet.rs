@@ -9,7 +9,7 @@ use polars_io::cloud::CloudOptions;
 use polars_io::parquet::metadata::FileMetadataRef;
 use polars_io::predicates::{ScanIOPredicate, SkipBatchPredicate};
 use polars_io::utils::slice::split_slice_at_file;
-
+use crate::executors::scan::sma::SMAManager;
 use super::*;
 use crate::ScanPredicate;
 
@@ -41,6 +41,7 @@ impl ParquetExec {
         cloud_options: Option<CloudOptions>,
         file_options: Box<FileScanOptions>,
         metadata: Option<FileMetadataRef>,
+        // row_groups_to_read: Option<Vec<usize>>,
     ) -> Self {
         ParquetExec {
             sources,
@@ -206,6 +207,7 @@ impl ParquetExec {
                             .as_ref()
                             .map(|x| (x.clone(), Arc::from(source.to_include_path_name()))),
                     );
+                    // .with_row_groups(self.row_groups.clone());
 
                 reader.num_rows().map(|num_rows| (reader, num_rows))
             });
@@ -501,6 +503,18 @@ impl ParquetExec {
         // applied. This code mitigates that by applying the predicate after the
         // collection of the entire dataframe if a row index is requested. This is
         // inefficient.
+
+        // I can make the use_sma check here and return empty result for example
+        if self.options.use_sma {
+            println!("use_sma");
+            let sma_manager = SMAManager::new();
+            sma_manager.can_retrieve_from_sma(self.predicate.clone(),
+                                              self.metadata.clone());
+            // Call SMAManager to decide whether return result from sma, decide on some row groups,
+            // or just let it go with regular scan
+            return Ok(DataFrame::empty());
+        }
+
         let post_predicate = self
             .file_options
             .row_index

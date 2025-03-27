@@ -41,6 +41,8 @@ pub struct ParquetReader<R: Read + Seek> {
     hive_partition_columns: Option<Vec<Series>>,
     include_file_path: Option<(PlSmallStr, Arc<str>)>,
     use_statistics: bool,
+    row_groups: Option<Vec<usize>>, // Specify row groups to read
+    use_sma: bool,
 }
 
 impl<R: MmapBytesReader> ParquetReader<R> {
@@ -78,6 +80,11 @@ impl<R: MmapBytesReader> ParquetReader<R> {
     /// Add a row index column.
     pub fn with_row_index(mut self, row_index: Option<RowIndex>) -> Self {
         self.row_index = row_index;
+        self
+    }
+
+    pub fn with_row_groups(mut self, row_groups: Vec<usize>) -> Self {
+        self.row_groups = Some(row_groups);
         self
     }
 
@@ -166,6 +173,11 @@ impl<R: MmapBytesReader> ParquetReader<R> {
         self
     }
 
+    pub fn use_sma(mut self, toggle: bool) -> Self {
+        self.use_sma = toggle;
+        self
+    }
+
     /// Number of rows in the parquet file.
     pub fn num_rows(&mut self) -> PolarsResult<usize> {
         let metadata = self.get_metadata()?;
@@ -245,6 +257,8 @@ impl<R: MmapBytesReader> SerReader<R> for ParquetReader<R> {
             use_statistics: true,
             hive_partition_columns: None,
             include_file_path: None,
+            row_groups: None,
+            use_sma: false,
         }
     }
 
@@ -255,8 +269,32 @@ impl<R: MmapBytesReader> SerReader<R> for ParquetReader<R> {
 
     fn finish(mut self) -> PolarsResult<DataFrame> {
         let schema = self.schema()?;
-        let metadata = self.get_metadata()?.clone();
+        let mut metadata = self.get_metadata()?.clone();
         let n_rows = metadata.num_rows.min(self.slice.0 + self.slice.1);
+
+        if self.use_sma {
+            println!("using sma");
+            return Ok(DataFrame::empty());
+        }
+
+        // Apply row group filter to metadata
+        if let Some(rgs) = &self.row_groups {
+            let metadata_mut = Arc::make_mut(&mut metadata); // Clone if shared
+            metadata_mut.row_groups = rgs
+                .iter()
+                .filter_map(|&i| {
+                    if i < metadata_mut.row_groups.len() {
+                        Some(metadata_mut.row_groups[i].clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+
+        if metadata.row_groups.is_empty() {
+            return Ok(DataFrame::empty());
+        }
 
         if let Some(cols) = &self.columns {
             self.projection = Some(columns_to_projection(cols, schema.as_ref())?);

@@ -77,6 +77,10 @@ impl RowGroupMetadata {
         self.num_rows
     }
 
+    pub fn column_by_name(&self, name: &str) -> Option<&ColumnChunkMetadata> {
+        self.column_lookup.get(name).map(|x| &self.columns[x[0]])
+    }
+
     /// Total byte size of all uncompressed column data in this row group.
     pub fn total_byte_size(&self) -> usize {
         self.total_byte_size

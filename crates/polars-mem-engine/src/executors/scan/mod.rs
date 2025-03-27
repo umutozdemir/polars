@@ -8,6 +8,8 @@ mod ndjson;
 mod parquet;
 #[cfg(feature = "python")]
 mod python_scan;
+#[cfg(feature = "parquet")]
+mod sma;
 
 use std::mem;
 

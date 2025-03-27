@@ -23,6 +23,7 @@ pub struct ScanArgsParquet {
     pub glob: bool,
     pub include_file_paths: Option<PlSmallStr>,
     pub allow_missing_columns: bool,
+    pub use_sma: bool, // To specify which row groups to read
 }
 
 impl Default for ScanArgsParquet {
@@ -41,6 +42,7 @@ impl Default for ScanArgsParquet {
             glob: true,
             include_file_paths: None,
             allow_missing_columns: false,
+            use_sma: true, // Default to true
         }
     }
 }
@@ -80,6 +82,7 @@ impl LazyFileListReader for LazyParquetReader {
             self.args.glob,
             self.args.include_file_paths,
             self.args.allow_missing_columns,
+            self.args.use_sma,
         )?
         .build()
         .into();

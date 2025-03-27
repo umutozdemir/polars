@@ -352,6 +352,7 @@ def scan_parquet(
     retries: int = 2,
     include_file_paths: str | None = None,
     allow_missing_columns: bool = False,
+    use_sma: bool = False,
 ) -> LazyFrame:
     """
     Lazily read from a local or cloud-hosted parquet file (or files).
@@ -517,6 +518,7 @@ def scan_parquet(
         glob=glob,
         include_file_paths=include_file_paths,
         allow_missing_columns=allow_missing_columns,
+        use_sma=use_sma,
     )
 
 
@@ -541,6 +543,7 @@ def _scan_parquet_impl(
     retries: int = 2,
     include_file_paths: str | None = None,
     allow_missing_columns: bool = False,
+    use_sma: bool = False,
 ) -> LazyFrame:
     if isinstance(source, list):
         sources = source
@@ -574,5 +577,6 @@ def _scan_parquet_impl(
         glob=glob,
         include_file_paths=include_file_paths,
         allow_missing_columns=allow_missing_columns,
+        use_sma=use_sma,
     )
     return wrap_ldf(pylf)

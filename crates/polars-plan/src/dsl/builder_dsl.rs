@@ -90,6 +90,7 @@ impl DslBuilder {
         glob: bool,
         include_file_paths: Option<PlSmallStr>,
         allow_missing_columns: bool,
+        use_sma: bool,
     ) -> PolarsResult<Self> {
         let options = Box::new(FileScanOptions {
             with_columns: None,
@@ -113,6 +114,7 @@ impl DslBuilder {
                     parallel,
                     low_memory,
                     use_statistics,
+                    use_sma,
                 },
                 cloud_options,
                 metadata: None,

@@ -301,7 +301,7 @@ impl PyLazyFrame {
     #[pyo3(signature = (
         source, sources, n_rows, cache, parallel, rechunk, row_index, low_memory, cloud_options,
         credential_provider, use_statistics, hive_partitioning, schema, hive_schema,
-        try_parse_hive_dates, retries, glob, include_file_paths, allow_missing_columns,
+        try_parse_hive_dates, retries, glob, include_file_paths, allow_missing_columns, use_sma
     ))]
     fn new_from_parquet(
         source: Option<PyObject>,
@@ -323,6 +323,7 @@ impl PyLazyFrame {
         glob: bool,
         include_file_paths: Option<String>,
         allow_missing_columns: bool,
+        use_sma: bool
     ) -> PyResult<Self> {
         use cloud::credential_provider::PlCredentialProvider;
 
@@ -355,6 +356,7 @@ impl PyLazyFrame {
             glob,
             include_file_paths: include_file_paths.map(|x| x.into()),
             allow_missing_columns,
+            use_sma,
         };
 
         let sources = sources.0;

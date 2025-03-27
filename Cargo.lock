@@ -3257,6 +3257,7 @@ dependencies = [
 name = "polars-mem-engine"
 version = "0.46.0"
 dependencies = [
+ "bincode",
  "futures",
  "memmap2",
  "polars-arrow",
@@ -3266,12 +3267,14 @@ dependencies = [
  "polars-io",
  "polars-json",
  "polars-ops",
+ "polars-parquet",
  "polars-plan",
  "polars-time",
  "polars-utils",
  "pyo3",
  "rayon",
  "recursive",
+ "serde",
  "tokio",
 ]
 
