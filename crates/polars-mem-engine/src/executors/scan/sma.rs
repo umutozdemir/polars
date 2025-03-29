@@ -5,8 +5,9 @@ use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
 use polars_io::prelude::FileMetadataRef;
-use polars_parquet::parquet::metadata::ColumnOrder;
 use crate::ScanPredicate;
+
+const SMA_BASE_FOLDER: &str = "/Users/u.oezdemir/Desktop/thesis/data";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SMAHeader {
@@ -27,34 +28,40 @@ pub struct OutlierEntry {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SMA {
     pub header: SMAHeader,
-    pub results: Vec<OutlierEntry>, // List of Outlier information per query
+    pub results: HashMap<String, OutlierEntry>, // Key: predicate, Value: OutlierEntry
 }
 
 impl SMA {
     fn new() -> Self {
         SMA {
             header: SMAHeader { version: "SMA".to_string(), predicate_count: 0 },
-            results: vec![],
+            results: HashMap::new(),
         }
     }
 
     pub fn add_result(&mut self, predicate: String, min: f64, max: f64, lower_threshold: f64, upper_threshold: f64, outliers: Option<Vec<DataFrame>>) {
-        self.results.push(OutlierEntry {
-            predicate,
+        let outlier_entry = OutlierEntry {
+            predicate: predicate.clone(),
             min,
             max,
             lower_threshold,
             upper_threshold,
             outliers,
-        })
+        };
+        self.results.insert(predicate, outlier_entry);
+        self.header.predicate_count = self.results.len();
     }
 
-    pub fn get_results(&self) -> &Vec<OutlierEntry> {
+    pub fn get_results(&self) -> &HashMap<String, OutlierEntry> {
         &self.results
     }
 
-    pub fn get_results_mut(&mut self) -> &mut Vec<OutlierEntry> {
+    pub fn get_results_mut(&mut self) -> &mut HashMap<String, OutlierEntry> {
         &mut self.results
+    }
+
+    pub fn get_outliers_by_predicate(&self, predicate: &str) -> Option<&OutlierEntry> {
+        self.results.get(predicate)
     }
 
     pub fn get_header(&self) -> &SMAHeader {
@@ -89,6 +96,10 @@ impl SMA {
             .expect("Failed to deserialize SMA struct");
         Ok(decoded_data)
     }
+
+    pub fn has_outlier_entry(&self, predicate: &str) -> bool {
+        self.results.contains_key(predicate)
+    }
 }
 
 #[derive(Debug)]
@@ -107,6 +118,11 @@ impl SMAManager {
         self.smas.insert(file_name, sma);
     }
 
+    pub fn is_sma_exist(&self, file_name: &str) -> bool {
+        let file_path_in_base_folder = format!("{}/{}", SMA_BASE_FOLDER, file_name);
+        std::path::Path::new(&file_path_in_base_folder).exists()
+    }
+
     pub fn get_sma(&self, file_name: &str) -> Option<&SMA> {
         self.smas.get(file_name)
     }
@@ -119,8 +135,9 @@ impl SMAManager {
         self.smas.contains_key(file_name)
     }
 
-    pub fn can_retrieve_from_sma(&self, predicates: Option<ScanPredicate>, metadata: Option<FileMetadataRef>) -> bool {
+    pub fn can_retrieve_from_sma(&self, predicates: Option<ScanPredicate>, metadata: Option<FileMetadataRef>, file_path: &str) -> bool {
         let predicate_column;
+
         if let Some(predicates) = predicates {
             predicate_column = predicates.live_columns.iter().next().cloned();
             println!("predicate_column: {:?}", predicate_column);
@@ -129,38 +146,61 @@ impl SMAManager {
             return false
         }
 
-        let mut global_min = f64::INFINITY;
-        let mut global_max = f64::NEG_INFINITY;
+        if !self.is_sma_exist(file_path) {
+            println!("SMA does not exist for file: {}", file_path);
+            return false;
+        }
+
+        let sma = match self.get_sma(file_path) {
+            Some(s) => s,
+            None => {
+                println!("SMA struct does not exist for file: {}", file_path);
+                return false;
+            }
+        };
+
+        let column_name = match &predicate_column {
+            Some(name) => name,
+            None => return false
+        };
+
+        return sma.has_outlier_entry(column_name);
+
+        let mut min_value = f64::INFINITY;
+        let mut max_value = f64::NEG_INFINITY;
 
         if let Some(metadata) = metadata {
-            for (index, order) in metadata.column_orders.iter().enumerate() {
-                println!("Column {}: {:?}", index, order);
-            }
-
+            //
+            // for (index, order) in metadata.column_orders.iter().enumerate() {
+            //    println!("Column {}: {:?}", index, order);
+            // }
             if let Some(column_name) = predicate_column {
                 for (row_group_index, row_group) in metadata.row_groups.iter().enumerate() {
                     let column_metadata =  row_group.column_by_name(column_name.as_str());
                         let column_meta_data = column_metadata.unwrap().metadata();
                             if let Some(statistics) = &column_meta_data.statistics {
-                                while let Some(v) = statistics.max_value.clone() {
-                                    v.iter().for_each(|v| global_max = global_max.max(*v as f64));
+                                if let Some(max_values) = &statistics.max_value {
+                                    // println!("Max values array: {:?}", max_values);
+                                    max_value =  max_value.max(max_values[0] as f64);
+                                    // max_values.iter().for_each(|v| max_value = max_value.max(*v as f64));
                                 }
-                                while let Some(v) = statistics.min_value.clone() {
-                                    v.iter().for_each(|v| global_min = global_min.min(*v as f64));
+                                if let Some(min_values) = &statistics.min_value {
+                                    // println!("Min values array: {:?}", min_values);
+                                    min_value =  min_value.min(min_values[0] as f64);
+                                    // min_values.iter().for_each(|v| min_value = min_value.min(*v as f64));
                                 }
-                                println!(
-                                    "Row Group: {}, Column: {}, Min: {}, Max: {}",
-                                    row_group_index, column_name, global_min, global_max
-                                );
+                                // println!(
+                                 //   "Row Group: {}, Column: {}, Min: {}, Max: {}",
+                                 //   row_group_index, column_name, min_value, max_value
+                               // );
                             }
                 }
-
-                if global_min == f64::INFINITY || global_max == f64::NEG_INFINITY {
+                if min_value == f64::INFINITY || max_value == f64::NEG_INFINITY {
                     eprintln!("No valid min/max values found for column '{}'.", column_name);
                 } else {
                     println!(
                         "Final min/max values for column '{}': Min: {}, Max: {}",
-                        column_name, global_min, global_max
+                        column_name, min_value, max_value
                     );
                 }
 
@@ -169,7 +209,11 @@ impl SMAManager {
         }
 
 
-        let (lower_threshold, upper_threshold) = Self::calculate_thresholds_with_iqr(global_min, global_max);
+        let (lower_threshold, upper_threshold) = Self::calculate_thresholds_with_iqr(min_value, max_value);
+        let (lower_threshold_2, upper_threshold_2) = Self::calculate_thresholds_with_empirical(min_value, max_value);
+
+        println!("lower_threshold: {}, upper_threshold: {}", lower_threshold, upper_threshold);
+        println!("lower_threshold_2: {}, upper_threshold_2: {}", lower_threshold_2, upper_threshold_2);
 
 
         // Go over the values of the column that predicate applied such as column 'a'
@@ -188,6 +232,16 @@ impl SMAManager {
             println!("predicates is None");
             false
         }
+    }
+
+    pub fn get_result_from_sma(&self, predicate: &str, file_name: &str) -> Option<&OutlierEntry> {
+        let sma = match self.get_sma(file_name) {
+            Some(s) => s,
+            None => {
+                return None;
+            }
+        };
+        sma.get_outliers_by_predicate(predicate)
     }
 
     fn calculate_thresholds_with_iqr(min: f64, max: f64) -> (f64, f64) {

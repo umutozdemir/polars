@@ -506,13 +506,25 @@ impl ParquetExec {
 
         // I can make the use_sma check here and return empty result for example
         if self.options.use_sma {
-            println!("use_sma");
+            println!("use_sma is enabled");
+            // paths is an array contains may contain multiple parquet file paths but I assume there
+            // will be always one parquet file in query.
+            let paths = self.sources.into_paths().unwrap(); // Create a longer-lived variable
+            let file_path = paths.get(0).unwrap().to_str().unwrap(); // Safely access the path
+
             let sma_manager = SMAManager::new();
-            sma_manager.can_retrieve_from_sma(self.predicate.clone(),
-                                              self.metadata.clone());
-            // Call SMAManager to decide whether return result from sma, decide on some row groups,
-            // or just let it go with regular scan
-            return Ok(DataFrame::empty());
+            if sma_manager.can_retrieve_from_sma(self.predicate.clone(),
+                                              self.metadata.clone(),
+                                              file_path) {
+                // TODO: Implement and call get_result_from_sma method.
+                let column_name = self
+                    .predicate
+                    .clone()
+                    .and_then(|predicates| predicates.live_columns.iter().next().cloned());
+                let res = sma_manager.get_result_from_sma(column_name.clone().unwrap().as_str(), file_path);
+                // Return empty dataset for now.
+                return Ok(DataFrame::empty());
+            }
         }
 
         let post_predicate = self
