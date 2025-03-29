@@ -9,7 +9,9 @@ use polars_io::cloud::CloudOptions;
 use polars_io::parquet::metadata::FileMetadataRef;
 use polars_io::predicates::{ScanIOPredicate, SkipBatchPredicate};
 use polars_io::utils::slice::split_slice_at_file;
-use crate::executors::scan::sma::SMAManager;
+use polars_compute::rolling::QuantileMethod;
+use polars_utils::float;
+use crate::executors::scan::sma::{OutlierEntry, SMAManager};
 use super::*;
 use crate::ScanPredicate;
 
@@ -28,6 +30,7 @@ pub struct ParquetExec {
     file_options: Box<FileScanOptions>,
     #[allow(dead_code)]
     metadata: Option<FileMetadataRef>,
+    sma_manager: SMAManager,
 }
 
 impl ParquetExec {
@@ -56,6 +59,7 @@ impl ParquetExec {
             cloud_options,
             file_options,
             metadata,
+            sma_manager: SMAManager::new(),
         }
     }
 
@@ -504,28 +508,31 @@ impl ParquetExec {
         // collection of the entire dataframe if a row index is requested. This is
         // inefficient.
 
+        let mut sma_file_exists: bool = false;
+        let mut sma_entry_for_predicate_exists: bool = false;
+
         // I can make the use_sma check here and return empty result for example
         if self.options.use_sma {
             println!("use_sma is enabled");
-            // paths is an array contains may contain multiple parquet file paths but I assume there
+            // paths is an array contains may contain multiple parquet file paths, but I assume there
             // will be always one parquet file in query.
-            let paths = self.sources.into_paths().unwrap(); // Create a longer-lived variable
-            let file_path = paths.get(0).unwrap().to_str().unwrap(); // Safely access the path
+            let paths = self.sources.into_paths().unwrap();
+            let file_path = paths.get(0).unwrap().to_str().unwrap();
 
-            let sma_manager = SMAManager::new();
-            if sma_manager.can_retrieve_from_sma(self.predicate.clone(),
-                                              self.metadata.clone(),
-                                              file_path) {
-                // TODO: Implement and call get_result_from_sma method.
+            (sma_file_exists, sma_entry_for_predicate_exists) =  self.sma_manager.can_retrieve_from_sma(self.predicate.clone(), file_path);
+            if sma_file_exists && sma_entry_for_predicate_exists {
+                println!("SMA entry for predicate exists");
                 let column_name = self
                     .predicate
                     .clone()
                     .and_then(|predicates| predicates.live_columns.iter().next().cloned());
-                let res = sma_manager.get_result_from_sma(column_name.clone().unwrap().as_str(), file_path);
+                let res = self.sma_manager.get_result_from_sma(column_name.clone().unwrap().as_str(), file_path);
                 // Return empty dataset for now.
                 return Ok(DataFrame::empty());
             }
         }
+
+        println!("use_sma is passed");
 
         let post_predicate = self
             .file_options
@@ -559,6 +566,74 @@ impl ParquetExec {
         if self.file_options.rechunk {
             out.as_single_chunk_par();
         }
+
+        println!("{}", self.options.use_sma.to_string());
+        // Check if we need to create SMA from the given query.
+        if self.options.use_sma {
+            println!("use_sma is enabled-2");
+            println!("SMA will be inserted/created");
+            let column_name = if let Some(predicates) = self.predicate.clone() {
+                predicates.live_columns.iter().next().cloned()
+            } else {
+                eprintln!("predicates is None");
+                None
+            };
+
+            if let Some(ref col_name) = column_name {
+                if let Some(column) = out.column(col_name.as_str()).ok() {
+                    let series = column.as_series().unwrap();
+                    let q1 = series.quantile_reduce(0.25, QuantileMethod::Linear)?;
+                    let q3 = series.quantile_reduce(0.75, QuantileMethod::Linear)?;
+
+                    let q1_float = match q1.value() {
+                        AnyValue::Float64(v) => v,
+                        _ => return Err(PolarsError::ComputeError("Expected Float64 value for Q1".into())),
+                    };
+
+                    let q3_float = match q3.value() {
+                        AnyValue::Float64(v) => v,
+                        _ => return Err(PolarsError::ComputeError("Expected Float64 value for Q3".into())),
+                    };
+
+                    let iqr = q3_float - q1_float;
+                    let lower_threshold = q1_float - 1.5 * iqr;
+                    let upper_threshold = q3_float + 1.5 * iqr;
+
+                    println!("Lower Threshold: {}, Upper Threshold: {}", lower_threshold, upper_threshold);
+
+                    let paths = self.sources.into_paths().unwrap();
+                    let file_path = paths.get(0).unwrap().to_str().unwrap();
+
+                    // First create the sma file if not exist
+                    if !sma_file_exists {
+                        println!("Creating SMA file");
+                        self.sma_manager.create_sma_file(file_path)
+                            .expect("File creation failed");
+                    }
+
+                    println!("Successfully created SMA file");
+                    // Insert the OutlierEntry for given predicate
+                    if let Some(sma) = self.sma_manager.get_sma_mut(file_path.replace(".parquet", ".sma").as_str()) {
+                        sma.add_result(
+                            col_name.clone().into_string(),
+                            series.min()?.unwrap_or(f64::NEG_INFINITY),
+                            series.max()?.unwrap_or(f64::INFINITY),
+                            lower_threshold,
+                            upper_threshold,
+                            None,
+                        );
+                    } else {
+                        eprintln!("Failed to get SMA file");
+                    }
+                    println!("Successfully created SMA entry");
+                } else {
+                    println!("No column name found for given predicate");
+                }
+            } else {
+                println!("No column name found for given predicate");
+            }
+        }
+        println!("Bastircak");
         Ok(out)
     }
 

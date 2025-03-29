@@ -21,7 +21,7 @@ polars-ops = { workspace = true, features = ["chunked_ids"] }
 polars-plan = { workspace = true }
 polars-time = { workspace = true, optional = true }
 polars-utils = { workspace = true }
-polars-parquet = { workspace = true }
+polars-compute = { workspace = true }
 pyo3 = { workspace = true, optional = true }
 rayon = { workspace = true }
 recursive = { workspace = true }
