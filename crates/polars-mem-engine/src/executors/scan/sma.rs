@@ -124,23 +124,12 @@ impl SMAManager {
     }
 
     // Finds if the sma file and the sma entry for given predicate exists.
-    pub fn can_retrieve_from_sma(&mut self, predicates: Option<ScanPredicate>, file_path: &str) -> bool
+    pub fn can_retrieve_from_sma(&mut self, file_path: &str) -> bool
     {
-        let predicate_column;
-
-        if let Some(predicates) = predicates {
-            predicate_column = predicates.live_columns.iter().next().cloned();
-            println!("predicate_column: {:?}", predicate_column);
-        } else {
-            eprintln!("predicates is None");
-            return false;
-        }
-
         if !self.sma_file_exist(file_path) {
             println!("SMA does not exist for file: {}", file_path);
             return false;
         }
-
         true
     }
     pub fn deserialize_sma_file(&self, path: &str) ->  Result<SMA, io::Error> {

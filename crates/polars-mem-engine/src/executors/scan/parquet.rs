@@ -520,31 +520,39 @@ impl ParquetExec {
 
             let sma_file_name = file_path.replace(".parquet", ".sma");
 
-            sma_file_exists = self.sma_manager.can_retrieve_from_sma(self.predicate.clone(), sma_file_name.as_str());
+            let mut predicate_column: Option<PlSmallStr> = None;
+
+            if let Some(predicates) = self.predicate.clone() {
+                predicate_column = predicates.live_columns.iter().next().cloned();
+                println!("predicate_column: {:?}", predicate_column);
+            } else {
+                eprintln!("predicates is None");
+            }
+
+            sma_file_exists = self.sma_manager.can_retrieve_from_sma(sma_file_name.as_str());
 
             if sma_file_exists {
                 println!("SMA entry for predicate exists");
 
-                let column_name = self
-                    .predicate
-                    .clone()
-                    .and_then(|predicates| predicates.live_columns.iter().next().cloned());
-
                 let sma = self.sma_manager.deserialize_sma_file(sma_file_name.as_str())?;
 
-                if sma.results.contains_key(column_name.as_ref().unwrap().as_str()) {
-                    sma_entry_for_predicate_exists = true;
+                if let Some(col_name) = predicate_column.as_ref() {
+                    if sma.results.contains_key(col_name.as_str()) {
+                        sma_entry_for_predicate_exists = true;
+                        if let Some(result) = sma.results.get(col_name.as_str()) {
+                            println!("Result found, returning from outliers");
+                            return Ok(result.outliers.clone().unwrap_or_else(|| DataFrame::empty()));
+                        } else {
+                            println!("No result found for given predicate");
+                        }
+                    } else {
+                        println!("SMA entry for given predicate does not exists");
+                    }
+                } else {
+                    println!("No column name found for given predicate");
                 }
 
-                let col_name = column_name.as_ref().unwrap().to_string();
-
-                let df = sma.results.get(&col_name).unwrap().outliers.clone();
-
-                if df.is_none() {
-                    return Ok(DataFrame::empty());
-                }
-
-                return Ok(sma.results.get(&col_name).unwrap().outliers.clone().unwrap())
+                return Ok(DataFrame::empty());
             }
         }
 
@@ -627,7 +635,7 @@ impl ParquetExec {
                         max: series.max()?.unwrap_or(f64::INFINITY),
                         lower_threshold,
                         upper_threshold,
-                        outliers: None
+                        outliers: Some(out.clone()),
                     };
 
                     // First create the sma file if not exist
