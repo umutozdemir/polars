@@ -540,6 +540,7 @@ impl ParquetExec {
                     if sma.results.contains_key(col_name.as_str()) {
                         sma_entry_for_predicate_exists = true;
                         if let Some(result) = sma.results.get(col_name.as_str()) {
+                            // TODO: Check if the filter satisfies outlier conditions
                             println!("Result found, returning from outliers");
                             return Ok(result.outliers.clone().unwrap_or_else(|| DataFrame::empty()));
                         } else {
@@ -628,14 +629,62 @@ impl ParquetExec {
                     let file_path = paths.get(0).unwrap().to_str().unwrap();
                     let sma_file_name = file_path.replace(".parquet", ".sma");
 
-                    // Create the OutlierEntry for given predicate
+                    // get the column that lower&upper threshold applies
+                    let column_series = out.column(col_name.clone().as_str())?;
+
+                    // Create a Boolean mask for numeric datatypes
+                    let lower_mask = match column_series.dtype() {
+                        DataType::Float64 => {
+                            let lower_threshold_f64 = lower_threshold as f64;
+                            column_series.f64()?.lt(lower_threshold_f64)
+                        },
+                        DataType::Float32 => {
+                            let lower_threshold_f32 = lower_threshold as f32;
+                            column_series.f32()?.lt(lower_threshold_f32)
+                        },
+                        DataType::Int32 => {
+                            let lower_threshold_i32 = lower_threshold as i32;
+                            column_series.i32()?.lt(lower_threshold_i32)
+                        },
+                        DataType::Int64 => {
+                            let lower_threshold_i64 = lower_threshold as i64;
+                            column_series.i64()?.lt(lower_threshold_i64)
+                        },
+                        _ => return Err(PolarsError::ComputeError("Unsupported dtype for comparison".into())),
+                    };
+
+                    let upper_mask = match column_series.dtype() {
+                        DataType::Float64 => {
+                            let upper_threshold_f64 = upper_threshold as f64;
+                            column_series.f64()?.gt(upper_threshold_f64)
+                        },
+                        DataType::Float32 => {
+                            let upper_threshold_f32 = upper_threshold as f32;
+                            column_series.f32()?.gt(upper_threshold_f32)
+                        },
+                        DataType::Int32 => {
+                            let upper_threshold_i32 = upper_threshold as i32;
+                            column_series.i32()?.gt(upper_threshold_i32)
+                        },
+                        DataType::Int64 => {
+                            let upper_threshold_i64 = upper_threshold as i64;
+                            column_series.i64()?.gt(upper_threshold_i64)
+                        },
+                        _ => return Err(PolarsError::ComputeError("Unsupported dtype for comparison".into())),
+                    };
+                    let outlier_mask = &lower_mask | &upper_mask;
+
+                    // Apply the filter to get only outlier rows
+                    let outliers_df = out.filter(&outlier_mask)?;
+                    println!("Detected {} outliers based on thresholds.", outliers_df.height());
+                    // TODO: It should have worked predicate based. a<50 or a>50 a>160
                     let sma_entry: OutlierEntry =  OutlierEntry {
                         predicate: col_name.clone().into_string(),
                         min: series.min()?.unwrap_or(f64::NEG_INFINITY),
                         max: series.max()?.unwrap_or(f64::INFINITY),
                         lower_threshold,
                         upper_threshold,
-                        outliers: Some(out.clone()),
+                        outliers: Some(outliers_df),
                     };
 
                     // First create the sma file if not exist

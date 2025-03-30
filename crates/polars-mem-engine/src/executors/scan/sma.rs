@@ -4,8 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
-use polars_io::prelude::FileMetadataRef;
-use crate::ScanPredicate;
 
 const SMA_BASE_FOLDER: &str = "/Users/u.oezdemir/Desktop/thesis/data";
 
@@ -37,59 +35,6 @@ impl SMA {
             header: SMAHeader { version: "SMA".to_string(), predicate_count: 0 },
             results: HashMap::new(),
         }
-    }
-
-    pub fn add_result(&mut self, predicate: String, min: f64, max: f64, lower_threshold: f64, upper_threshold: f64, outliers: Option<DataFrame>) {
-        let outlier_entry = OutlierEntry {
-            predicate: predicate.clone(),
-            min,
-            max,
-            lower_threshold,
-            upper_threshold,
-            outliers,
-        };
-        self.results.insert(predicate, outlier_entry);
-        self.header.predicate_count = self.results.len();
-    }
-
-    pub fn get_results(&self) -> &HashMap<String, OutlierEntry> {
-        &self.results
-    }
-
-    pub fn get_results_mut(&mut self) -> &mut HashMap<String, OutlierEntry> {
-        &mut self.results
-    }
-
-    pub fn get_outliers_by_predicate(&self, predicate: &str) -> Option<&OutlierEntry> {
-        self.results.get(predicate)
-    }
-
-    pub fn get_header(&self) -> &SMAHeader {
-        &self.header
-    }
-
-    pub fn get_header_mut(&mut self) -> &mut SMAHeader {
-        &mut self.header
-    }
-
-    pub fn get_header_version(&self) -> &String {
-        &self.header.version
-    }
-
-    pub fn get_header_predicate_count(&self) -> &usize {
-        &self.header.predicate_count
-    }
-
-    pub fn write_to_file(&self, path: &str) -> Result<(), io::Error> {
-        let mut file = File::create(path)?;
-        let encoded_data = bincode::serialize(self)
-            .expect("Failed to serialize SMA struct");
-        file.write_all(&encoded_data)?;
-        Ok(())
-    }
-
-    pub fn has_outlier_entry(&self, predicate: &str) -> bool {
-        self.results.contains_key(predicate)
     }
 }
 
@@ -159,26 +104,4 @@ impl SMAManager {
         file.write_all(&encoded_data)?;
         Ok(())
     }
-
-     fn find_outliers(column_data: &[f64]) -> Vec<f64> {
-         const OUTLIER_MULTIPLIER: f64 = 1.5;
-
-         // Basic statistics
-         let min = column_data.iter().cloned().fold(f64::INFINITY, f64::min);
-         let max = column_data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-         let mean = column_data.iter().sum::<f64>() / column_data.len() as f64;
-
-         // Determine thresholds for outliers (e.g. upper = mean + 1.5 * range)
-         let range = max - min;
-         let lower_threshold = mean - OUTLIER_MULTIPLIER * range;
-         let upper_threshold = mean + OUTLIER_MULTIPLIER * range;
-
-         // Identify outliers
-         let outliers: Vec<_> = column_data
-             .iter()
-             .filter(|value| **value < lower_threshold || **value > upper_threshold)
-             .cloned()
-             .collect();
-        outliers
-     }
 }
