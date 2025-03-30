@@ -1,6 +1,6 @@
 use polars_core::frame::DataFrame;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
@@ -22,7 +22,7 @@ pub struct OutlierEntry {
     pub max: f64,
     pub lower_threshold: f64,
     pub upper_threshold: f64,
-    pub outliers: Option<Vec<DataFrame>>,
+    pub outliers: Option<DataFrame>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -39,7 +39,7 @@ impl SMA {
         }
     }
 
-    pub fn add_result(&mut self, predicate: String, min: f64, max: f64, lower_threshold: f64, upper_threshold: f64, outliers: Option<Vec<DataFrame>>) {
+    pub fn add_result(&mut self, predicate: String, min: f64, max: f64, lower_threshold: f64, upper_threshold: f64, outliers: Option<DataFrame>) {
         let outlier_entry = OutlierEntry {
             predicate: predicate.clone(),
             min,
@@ -87,15 +87,6 @@ impl SMA {
         file.write_all(&encoded_data)?;
         Ok(())
     }
-    
-    pub fn read_from_file(path: &str) ->  Result<Self, io::Error> {
-        let mut file = File::open(path)?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
-        let decoded_data: SMA = bincode::deserialize(&buffer)
-            .expect("Failed to deserialize SMA struct");
-        Ok(decoded_data)
-    }
 
     pub fn has_outlier_entry(&self, predicate: &str) -> bool {
         self.results.contains_key(predicate)
@@ -104,45 +95,36 @@ impl SMA {
 
 #[derive(Debug)]
 pub struct SMAManager {
-    smas: HashMap<String, SMA>, // key as a file name, values as SMA object
+    smas: HashSet<String> // keep tracks of existed SMA files
 }
 
 impl SMAManager {
     pub fn new() -> Self {
         Self {
-            smas: HashMap::new(),
+            smas: HashSet::new(),
         }
     }
 
-    pub fn insert_sma(&mut self, file_name: String, sma: SMA) {
-        self.smas.insert(file_name, sma);
+    pub fn insert_sma(&mut self, file_name: String) {
+        self.smas.insert(file_name);
     }
 
-    pub fn is_sma_file_exist(&self, file_name: &str) -> bool {
-        let sma_file_name = if file_name.ends_with(".parquet") {
-            file_name.replace(".parquet", ".sma")
-        } else {
-            file_name.to_string()
-        };
-
-        let file_path_in_base_folder = format!("{}/{}", SMA_BASE_FOLDER, sma_file_name);
-        std::path::Path::new(&file_path_in_base_folder).exists()
-    }
-
-    pub fn get_sma(&self, file_name: &str) -> Option<&SMA> {
-        self.smas.get(file_name)
-    }
-
-    pub fn get_sma_mut(&mut self, file_name: &str) -> Option<&mut SMA> {
-        self.smas.get_mut(file_name)
-    }
-
-    pub fn can_use_sma(&self, file_name: &str) -> bool {
-        self.smas.contains_key(file_name)
+    pub fn sma_file_exist(&mut self, file_name: &str) -> bool {
+        if self.smas.contains(file_name) {
+            return true;
+        }
+        let file_path_in_base_folder = format!("{}/{}", SMA_BASE_FOLDER, file_name);
+        let file_exists_in_base_folder = std::path::Path::new(&file_path_in_base_folder).exists();
+        // Sync with the hashset
+        if file_exists_in_base_folder {
+            self.smas.insert(file_name.to_string());
+            return true;
+        }
+        false
     }
 
     // Finds if the sma file and the sma entry for given predicate exists.
-    pub fn can_retrieve_from_sma(&self, predicates: Option<ScanPredicate>, file_path: &str) -> (bool, bool)
+    pub fn can_retrieve_from_sma(&mut self, predicates: Option<ScanPredicate>, file_path: &str) -> bool
     {
         let predicate_column;
 
@@ -151,61 +133,42 @@ impl SMAManager {
             println!("predicate_column: {:?}", predicate_column);
         } else {
             eprintln!("predicates is None");
-            return (false, false);
+            return false;
         }
 
-        if !self.is_sma_file_exist(file_path) {
+        if !self.sma_file_exist(file_path) {
             println!("SMA does not exist for file: {}", file_path);
-            return (false, false);
+            return false;
         }
 
-        let sma = match self.get_sma(file_path.replace(".parquet", ".sma").as_str()) {
-            Some(s) => s,
-            None => {
-                println!("SMA struct does not exist for file: {}", file_path);
-                return (true, false);
-            }
-        };
-
-        (true, sma.has_outlier_entry(predicate_column.unwrap().as_str()))
+        true
     }
-
-    pub fn get_result_from_sma(&self, predicate: &str, file_name: &str) -> Option<&OutlierEntry> {
-        let sma = match self.get_sma(file_name) {
-            Some(s) => s,
-            None => {
-                return None;
-            }
-        };
-        sma.get_outliers_by_predicate(predicate)
+    pub fn deserialize_sma_file(&self, path: &str) ->  Result<SMA, io::Error> {
+        let mut file = File::open(path)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        let decoded_data: SMA = bincode::deserialize(&buffer)
+            .expect("Failed to deserialize SMA struct");
+        Ok(decoded_data)
     }
 
     pub fn create_sma_file(&mut self, file_name: &str) -> Result<(), io::Error> {
-        let sma_file_name = file_name.replace(".parquet", ".sma");
-        let file_path_in_base_folder = format!("{}/{}", SMA_BASE_FOLDER, sma_file_name);
+        let file_path_in_base_folder = format!("{}/{}", SMA_BASE_FOLDER, file_name);
         let mut file = File::create(file_path_in_base_folder)?;
         let encoded_data = bincode::serialize(&SMA::new())
             .expect("Failed to serialize SMA struct");
         file.write_all(&encoded_data)?;
-        self.insert_sma(sma_file_name, SMA::new());
+        self.insert_sma(file_name.to_string());
         Ok(())
     }
 
-    fn calculate_thresholds_with_iqr(min: f64, max: f64) -> (f64, f64) {
-        let first_quartile = min + (max - min) * 0.25;
-        let third_quartile = min + (max - min) * 0.75;
-        let iqr = third_quartile - first_quartile;
-        let lower_threshold = first_quartile - 1.5 * iqr;
-        let upper_threshold = third_quartile + 1.5 * iqr;
-        (lower_threshold, upper_threshold)
-    }
-
-    fn calculate_thresholds_with_empirical(min: f64, max: f64) -> (f64, f64) {
-        let mean = (min + max) / 2.0;
-        let std = (max - min) / 6.0;
-        let lower_threshold = mean - 3.0 * std;
-        let upper_threshold = mean + 3.0 * std;
-        (lower_threshold, upper_threshold)
+    pub fn update_sma_file(&mut self, file_name: &str, sma: SMA) -> Result<(), io::Error> {
+        let file_path_in_base_folder = format!("{}/{}", SMA_BASE_FOLDER, file_name);
+        let mut file = File::create(file_path_in_base_folder)?;
+        let encoded_data = bincode::serialize(&sma)
+            .expect("Failed to serialize SMA struct");
+        file.write_all(&encoded_data)?;
+        Ok(())
     }
 
      fn find_outliers(column_data: &[f64]) -> Vec<f64> {

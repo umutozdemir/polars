@@ -10,7 +10,6 @@ use polars_io::parquet::metadata::FileMetadataRef;
 use polars_io::predicates::{ScanIOPredicate, SkipBatchPredicate};
 use polars_io::utils::slice::split_slice_at_file;
 use polars_compute::rolling::QuantileMethod;
-use polars_utils::float;
 use crate::executors::scan::sma::{OutlierEntry, SMAManager};
 use super::*;
 use crate::ScanPredicate;
@@ -519,16 +518,33 @@ impl ParquetExec {
             let paths = self.sources.into_paths().unwrap();
             let file_path = paths.get(0).unwrap().to_str().unwrap();
 
-            (sma_file_exists, sma_entry_for_predicate_exists) =  self.sma_manager.can_retrieve_from_sma(self.predicate.clone(), file_path);
-            if sma_file_exists && sma_entry_for_predicate_exists {
+            let sma_file_name = file_path.replace(".parquet", ".sma");
+
+            sma_file_exists = self.sma_manager.can_retrieve_from_sma(self.predicate.clone(), sma_file_name.as_str());
+
+            if sma_file_exists {
                 println!("SMA entry for predicate exists");
+
                 let column_name = self
                     .predicate
                     .clone()
                     .and_then(|predicates| predicates.live_columns.iter().next().cloned());
-                let res = self.sma_manager.get_result_from_sma(column_name.clone().unwrap().as_str(), file_path);
-                // Return empty dataset for now.
-                return Ok(DataFrame::empty());
+
+                let sma = self.sma_manager.deserialize_sma_file(sma_file_name.as_str())?;
+
+                if sma.results.contains_key(column_name.as_ref().unwrap().as_str()) {
+                    sma_entry_for_predicate_exists = true;
+                }
+
+                let col_name = column_name.as_ref().unwrap().to_string();
+
+                let df = sma.results.get(&col_name).unwrap().outliers.clone();
+
+                if df.is_none() {
+                    return Ok(DataFrame::empty());
+                }
+
+                return Ok(sma.results.get(&col_name).unwrap().outliers.clone().unwrap())
             }
         }
 
@@ -567,7 +583,6 @@ impl ParquetExec {
             out.as_single_chunk_par();
         }
 
-        println!("{}", self.options.use_sma.to_string());
         // Check if we need to create SMA from the given query.
         if self.options.use_sma {
             println!("use_sma is enabled-2");
@@ -603,29 +618,41 @@ impl ParquetExec {
 
                     let paths = self.sources.into_paths().unwrap();
                     let file_path = paths.get(0).unwrap().to_str().unwrap();
+                    let sma_file_name = file_path.replace(".parquet", ".sma");
+
+                    // Create the OutlierEntry for given predicate
+                    let sma_entry: OutlierEntry =  OutlierEntry {
+                        predicate: col_name.clone().into_string(),
+                        min: series.min()?.unwrap_or(f64::NEG_INFINITY),
+                        max: series.max()?.unwrap_or(f64::INFINITY),
+                        lower_threshold,
+                        upper_threshold,
+                        outliers: None
+                    };
 
                     // First create the sma file if not exist
                     if !sma_file_exists {
                         println!("Creating SMA file");
-                        self.sma_manager.create_sma_file(file_path)
+                        self.sma_manager.create_sma_file(sma_file_name.as_ref())
                             .expect("File creation failed");
+                        println!("Successfully created SMA file");
+                    } else {
+                        println!("SMA file already exists");
                     }
 
-                    println!("Successfully created SMA file");
-                    // Insert the OutlierEntry for given predicate
-                    if let Some(sma) = self.sma_manager.get_sma_mut(file_path.replace(".parquet", ".sma").as_str()) {
-                        sma.add_result(
-                            col_name.clone().into_string(),
-                            series.min()?.unwrap_or(f64::NEG_INFINITY),
-                            series.max()?.unwrap_or(f64::INFINITY),
-                            lower_threshold,
-                            upper_threshold,
-                            None,
-                        );
+                    let col_name_str = column_name.as_ref().unwrap().to_string();
+
+                    if !sma_entry_for_predicate_exists {
+                        // Read the binary SMA file, add its results for the given predicate then save it back.
+                        let mut sma = self.sma_manager.deserialize_sma_file(sma_file_name.as_str())?;
+                        sma.results.insert(col_name_str, sma_entry);
+                        self.sma_manager.update_sma_file(sma_file_name.as_str(), sma)
+                            .expect("SMA file could not be updated");
+                        println!("Successfully updated the SMA entry");
                     } else {
-                        eprintln!("Failed to get SMA file");
+                        println!("SMA entry for given predicate already exists");
                     }
-                    println!("Successfully created SMA entry");
+
                 } else {
                     println!("No column name found for given predicate");
                 }
@@ -633,7 +660,7 @@ impl ParquetExec {
                 println!("No column name found for given predicate");
             }
         }
-        println!("Bastircak");
+
         Ok(out)
     }
 
