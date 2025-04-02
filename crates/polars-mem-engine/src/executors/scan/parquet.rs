@@ -555,8 +555,8 @@ impl ParquetExec {
 
                                 // Check if the expression value in the predicate satisfies thresholds
                                 let matches_outliers = match op {
-                                    Operator::Lt => expression_value > sma_entry.lower_threshold,
-                                    Operator::Gt => expression_value < sma_entry.upper_threshold,
+                                    Operator::Lt => expression_value < sma_entry.lower_threshold,
+                                    Operator::Gt => expression_value > sma_entry.upper_threshold,
                                     Operator::Eq => expression_value < sma_entry.lower_threshold ||
                                         expression_value > sma_entry.upper_threshold,
                                     _ => false,
