@@ -545,7 +545,7 @@ impl ParquetExec {
                         if let (Some(col_name), Some(op), Some(value)) = (col_name_opt, op_opt, value_opt) {
                             if let Some(sma_entry) = sma.results.get(col_name.as_str()) {
 
-                                let threshold_value = match value {
+                                let expression_value = match value {
                                     LiteralValue::Int32(v) => v as f64,
                                     LiteralValue::Int64(v) => v as f64,
                                     LiteralValue::Float32(v) => v as f64,
@@ -553,12 +553,12 @@ impl ParquetExec {
                                     _ => 0.0
                                 };
 
-                                // Check if the predicate condition matches with outliers
+                                // Check if the expression value in the predicate satisfies thresholds
                                 let matches_outliers = match op {
-                                    Operator::Lt => threshold_value > sma_entry.lower_threshold,
-                                    Operator::Gt => threshold_value < sma_entry.upper_threshold,
-                                    Operator::Eq => threshold_value < sma_entry.lower_threshold ||
-                                        threshold_value > sma_entry.upper_threshold,
+                                    Operator::Lt => expression_value > sma_entry.lower_threshold,
+                                    Operator::Gt => expression_value < sma_entry.upper_threshold,
+                                    Operator::Eq => expression_value < sma_entry.lower_threshold ||
+                                        expression_value > sma_entry.upper_threshold,
                                     _ => false,
                                 };
 
