@@ -533,18 +533,45 @@ impl ParquetExec {
 
             if sma_file_exists {
                 println!("SMA entry for predicate exists");
-
                 let sma = self.sma_manager.deserialize_sma_file(sma_file_name.as_str())?;
 
                 if let Some(col_name) = predicate_column.as_ref() {
                     if sma.results.contains_key(col_name.as_str()) {
                         sma_entry_for_predicate_exists = true;
-                        if let Some(result) = sma.results.get(col_name.as_str()) {
-                            // TODO: Check if the filter satisfies outlier conditions
-                            println!("Result found, returning from outliers");
-                            return Ok(result.outliers.clone().unwrap_or_else(|| DataFrame::empty()));
-                        } else {
-                            println!("No result found for given predicate");
+
+                        let (col_name_opt, op_opt, value_opt) =
+                            self.get_predicate_parameters(self.predicate.clone().unwrap().predicate.as_expression().unwrap());
+
+                        if let (Some(col_name), Some(op), Some(value)) = (col_name_opt, op_opt, value_opt) {
+                            if let Some(sma_entry) = sma.results.get(col_name.as_str()) {
+
+                                let threshold_value = match value {
+                                    LiteralValue::Int32(v) => v as f64,
+                                    LiteralValue::Int64(v) => v as f64,
+                                    LiteralValue::Float32(v) => v as f64,
+                                    LiteralValue::Float64(v) => v,
+                                    _ => 0.0
+                                };
+
+                                // Check if the predicate condition matches with outliers
+                                let matches_outliers = match op {
+                                    Operator::Lt => threshold_value > sma_entry.lower_threshold,
+                                    Operator::Gt => threshold_value < sma_entry.upper_threshold,
+                                    Operator::Eq => threshold_value < sma_entry.lower_threshold ||
+                                        threshold_value > sma_entry.upper_threshold,
+                                    _ => false,
+                                };
+
+                                if matches_outliers {
+                                    println!("Result found, returning from outliers");
+                                    return Ok(sma_entry.outliers.clone().unwrap_or_else(|| DataFrame::empty()));
+                                } else {
+                                    println!("Predicate condition do not lies on the outlier range. \
+                                    Will continue with a regular parquet scan");
+                                }
+                            } else {
+                                println!("No result found for given predicate");
+                            }
                         }
                     } else {
                         println!("SMA entry for given predicate does not exists");
@@ -552,12 +579,8 @@ impl ParquetExec {
                 } else {
                     println!("No column name found for given predicate");
                 }
-
-                return Ok(DataFrame::empty());
             }
         }
-
-        println!("use_sma is passed");
 
         let post_predicate = self
             .file_options
@@ -586,15 +609,8 @@ impl ParquetExec {
         let num_unfiltered_rows = out.height();
         self.file_info.row_estimation = (Some(num_unfiltered_rows), num_unfiltered_rows);
 
-        polars_io::predicates::apply_predicate(&mut out, post_predicate.as_deref(), true)?;
-
-        if self.file_options.rechunk {
-            out.as_single_chunk_par();
-        }
-
         // Check if we need to create SMA from the given query.
-        if self.options.use_sma {
-            println!("use_sma is enabled-2");
+        if self.options.use_sma && !sma_entry_for_predicate_exists {
             println!("SMA will be inserted/created");
             let column_name = if let Some(predicates) = self.predicate.clone() {
                 predicates.live_columns.iter().next().cloned()
@@ -677,7 +693,7 @@ impl ParquetExec {
                     // Apply the filter to get only outlier rows
                     let outliers_df = out.filter(&outlier_mask)?;
                     println!("Detected {} outliers based on thresholds.", outliers_df.height());
-                    // TODO: It should have worked predicate based. a<50 or a>50 a>160
+
                     let sma_entry: OutlierEntry =  OutlierEntry {
                         predicate: col_name.clone().into_string(),
                         min: series.min()?.unwrap_or(f64::NEG_INFINITY),
@@ -718,7 +734,52 @@ impl ParquetExec {
             }
         }
 
+        polars_io::predicates::apply_predicate(&mut out, post_predicate.as_deref(), true)?;
+
+        if self.file_options.rechunk {
+            out.as_single_chunk_par();
+        }
+
         Ok(out)
+    }
+
+    fn predicate_to_string(&mut self, predicate: &Expr) -> Option<String> {
+        if let Expr::BinaryExpr { left, op, right } = predicate {
+            if let Expr::Column(name) = &**left {
+                if let Expr::Literal(lit) = &**right {
+                    let op_str = match op {
+                        Operator::Lt => "lt",
+                        Operator::Gt => "gt",
+                        Operator::Eq => "eq",
+                        Operator::LtEq => "lteq",
+                        Operator::GtEq => "gteq",
+                        Operator::NotEq => "neq",
+                        _ => return None,
+                    };
+
+                    let value_str = match lit {
+                        LiteralValue::Int32(v) => v.to_string(),
+                        LiteralValue::Int64(v) => v.to_string(),
+                        LiteralValue::Float32(v) => v.to_string(),
+                        LiteralValue::Float64(v) => v.to_string(),
+                        _ => return None,
+                    };
+
+                    return Some(format!("{}_{}_{}", name, op_str, value_str));
+                }
+            }
+        }
+        None
+    }
+
+    fn get_predicate_parameters(&mut self, predicate: &Expr) -> (Option<String>, Option<Operator>, Option<LiteralValue>) {
+        if let Expr::BinaryExpr { left, op, right } = predicate {
+            if let Expr::Column(name) = &**left {
+                if let Expr::Literal(lit) = &**right {
+                    (Some(name.to_string()), Some(op.clone()), Some(lit.clone()))
+                } else { (None, None, None) }
+            } else { (None, None, None) }
+        } else { (None, None, None) }
     }
 
     fn metadata_sync(&mut self) -> PolarsResult<&FileMetadataRef> {
