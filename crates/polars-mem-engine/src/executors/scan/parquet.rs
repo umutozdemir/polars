@@ -546,25 +546,34 @@ impl ParquetExec {
                             if let Some(sma_entry) = sma.results.get(col_name.as_str()) {
 
                                 let expression_value = match value {
-                                    LiteralValue::Int32(v) => v as f64,
-                                    LiteralValue::Int64(v) => v as f64,
-                                    LiteralValue::Float32(v) => v as f64,
-                                    LiteralValue::Float64(v) => v,
-                                    _ => 0.0
+                                    LiteralValue::Int32(v) => v as i64,
+                                    LiteralValue::Int64(v) => v,
+                                    LiteralValue::Float32(v) => v as i64,
+                                    LiteralValue::Float64(v) => v as i64,
+                                    _ => 0
                                 };
 
                                 // Check if the expression value in the predicate satisfies thresholds
                                 let matches_outliers = match op {
-                                    Operator::Lt => expression_value < sma_entry.lower_threshold,
-                                    Operator::Gt => expression_value > sma_entry.upper_threshold,
-                                    Operator::Eq => expression_value < sma_entry.lower_threshold ||
-                                        expression_value > sma_entry.upper_threshold,
+                                    Operator::Lt => expression_value < sma_entry.lower_threshold as i64,
+                                    Operator::Gt => expression_value > sma_entry.upper_threshold as i64,
+                                    Operator::Eq => expression_value < sma_entry.lower_threshold as i64 ||
+                                        expression_value > sma_entry.upper_threshold as i64,
                                     _ => false,
                                 };
 
                                 if matches_outliers {
+                                    let mut outlier_out = sma_entry.outliers.clone().unwrap();
+                                    let expr_col = outlier_out.column(col_name.as_str()).ok().unwrap();
+                                    let filter_mask = match op {
+                                        Operator::Lt => expr_col.i64()?.lt(expression_value),
+                                        Operator::Gt => expr_col.i64()?.gt(expression_value),
+                                        _ => {expr_col.i64()?.lt(expression_value)}
+                                    };
+
+                                    let outliers_df = outlier_out.filter(&filter_mask)?;
                                     println!("Result found, returning from outliers");
-                                    return Ok(sma_entry.outliers.clone().unwrap_or_else(|| DataFrame::empty()));
+                                    return Ok(outliers_df);
                                 } else {
                                     println!("Predicate condition do not lies on the outlier range. \
                                     Will continue with a regular parquet scan");
