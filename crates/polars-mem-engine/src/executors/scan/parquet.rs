@@ -510,6 +510,12 @@ impl ParquetExec {
         let mut sma_file_exists: bool = false;
         let mut sma_entry_for_predicate_exists: bool = false;
 
+        println!("{}", self.file_options.file_counter.to_string());
+        println!("{}", self.sources.get(0).unwrap().to_string());
+        println!("{}", self.sources.get(1).unwrap().to_string());
+        println!("{}", self.sources.get(2).unwrap().to_string());
+        // I can access the source files by self.sources.get(index)
+
         // I can make the use_sma check here and return empty result for example
         if self.options.use_sma {
             println!("use_sma is enabled");
@@ -544,7 +550,8 @@ impl ParquetExec {
 
                         if let (Some(col_name), Some(op), Some(value)) = (col_name_opt, op_opt, value_opt) {
                             if let Some(sma_entry) = sma.results.get(col_name.as_str()) {
-
+                                // TODO: Based on the column series data type, convert expression_value,
+                                // sma_entry thresholds,
                                 let expression_value = match value {
                                     LiteralValue::Int32(v) => v as i64,
                                     LiteralValue::Int64(v) => v,
