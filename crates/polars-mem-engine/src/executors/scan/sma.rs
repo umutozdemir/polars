@@ -77,6 +77,7 @@ impl SMAManager {
         }
         true
     }
+    
     pub fn deserialize_sma_file(&self, path: &str) ->  Result<SMA, io::Error> {
         let mut file = File::open(path)?;
         let mut buffer = Vec::new();

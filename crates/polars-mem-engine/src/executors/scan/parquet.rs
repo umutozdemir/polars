@@ -509,11 +509,6 @@ impl ParquetExec {
 
         let mut sma_file_exists: bool = false;
         let mut sma_entry_for_predicate_exists: bool = false;
-
-        println!("{}", self.file_options.file_counter.to_string());
-        println!("{}", self.sources.get(0).unwrap().to_string());
-        println!("{}", self.sources.get(1).unwrap().to_string());
-        println!("{}", self.sources.get(2).unwrap().to_string());
         // I can access the source files by self.sources.get(index)
 
         // I can make the use_sma check here and return empty result for example
@@ -521,7 +516,11 @@ impl ParquetExec {
             println!("use_sma is enabled");
             // paths is an array contains may contain multiple parquet file paths, but I assume there
             // will be always one parquet file in query.
+            
             let paths = self.sources.into_paths().unwrap();
+            for path in paths {
+                println!("{}", path);
+            }
             let file_path = paths.get(0).unwrap().to_str().unwrap();
 
             let sma_file_name = file_path.replace(".parquet", ".sma");
